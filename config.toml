@@ -1,0 +1,19 @@
+[bot]
+name = "ScraperBot"
+description = "Bot de búsquedas y scraping automatizado"
+admins = [109371886]
+
+[database]
+type = "sqlite"
+path = "data/bot.db"
+
+[stripe]
+secret_key = "${STRIPE_SECRET_KEY}"
+publishable_key = "${STRIPE_PUBLISHABLE_KEY}"
+webhook_secret = "${STRIPE_WEBHOOK_SECRET}"
+base_url = "${STRIPE_BASE_URL:-https://tuservidor.com}"
+test_mode = true
+
+[scheduler]
+daily_report_hour = 8
+run_scrapes_interval_minutes = 60

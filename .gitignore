@@ -1,0 +1,8 @@
+/target
+node_modules
+admin/node_modules
+admin/.output
+admin/.nuxt
+data/*.db
+bot.log
+.env
