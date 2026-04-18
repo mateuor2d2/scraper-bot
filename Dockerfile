@@ -24,6 +24,9 @@ RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib
 # Copy backend binary
 COPY --from=rust-builder /app/target/release/scraper-bot /app/scraper-bot
 
+# Copy config
+COPY config.toml /app/config.toml
+
 # Copy admin static files
 COPY --from=admin-builder /app/admin/.output/public /app/admin
 
