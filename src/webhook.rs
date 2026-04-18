@@ -8,6 +8,7 @@ use axum::{
     Router,
 };
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::{ServeDir, ServeFile};
 use serde::Deserialize;
 
 use crate::db::Db;
@@ -197,12 +198,20 @@ pub async fn start_webhook_server(db: Arc<Db>, config: Arc<Config>, port: u16) -
         .allow_methods(Any)
         .allow_headers(Any);
 
+    let static_dir = std::env::var("ADMIN_STATIC_DIR").unwrap_or_else(|_| "admin/.output/public".to_string());
+    let index_path = format!("{}/index.html", static_dir);
+
     let app = router(state)
         .merge(crate::api::router(api_state))
+        .fallback_service(
+            ServeDir::new(&static_dir)
+                .fallback(ServeFile::new(&index_path))
+        )
         .layer(cors);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
     tracing::info!("Servidor webhook/API escuchando en puerto {}", port);
+    tracing::info!("Admin panel servido desde: {}", static_dir);
     axum::serve(listener, app).await?;
     Ok(())
 }
