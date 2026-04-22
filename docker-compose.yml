@@ -15,12 +15,11 @@ services:
       - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY}
       - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
       - STRIPE_BASE_URL=${STRIPE_BASE_URL:-https://paas.cima20.io}
+      - ADMIN_TOKEN=${ADMIN_TOKEN}
       - RUST_LOG=info
       - ADMIN_STATIC_DIR=/app/admin
     volumes:
       - scraper-data:/app/data
-    networks:
-      - dokploy-network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
       interval: 30s
@@ -31,7 +30,3 @@ services:
 volumes:
   scraper-data:
     driver: local
-
-networks:
-  dokploy-network:
-    external: true

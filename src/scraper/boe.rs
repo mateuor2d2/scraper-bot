@@ -6,7 +6,10 @@ use rss::Channel;
 use crate::models::SearchConfig;
 use crate::scraper::ScrapedItem;
 
-const BOE_RSS_URL: &str = "https://www.boe.es/rss/boe.php?s=1";
+// Default RSS URL for BOE job offers/oposiciones
+// canal_per.php?l=p&c=140 covers the last 2 months of oposiciones
+// Alternative: boe.php?s=2B for daily Section II.B (Oposiciones y concursos)
+const BOE_RSS_URL: &str = "https://www.boe.es/rss/canal_per.php?l=p&c=140";
 
 pub async fn scrape(config: &SearchConfig) -> Result<Vec<ScrapedItem>> {
     let client = Client::builder()
@@ -52,7 +55,7 @@ pub async fn scrape(config: &SearchConfig) -> Result<Vec<ScrapedItem>> {
                 description.as_deref().unwrap_or("").to_lowercase(),
                 link.as_deref().unwrap_or("").to_lowercase()
             );
-            if !keywords.iter().any(|kw| text.contains(kw)) {
+            if !keywords.iter().any(|kw| keyword_matches(&text, kw)) {
                 continue;
             }
         }
@@ -87,4 +90,65 @@ fn parse_rfc2822(date_str: &str) -> Option<NaiveDateTime> {
     chrono::DateTime::parse_from_rfc2822(date_str)
         .ok()
         .map(|dt| dt.naive_local())
+}
+
+/// Check if a keyword matches the text.
+/// Supports two matching modes:
+/// 1. Exact phrase match: "ingeniero industrial" matches "ingeniero industrial" (case-insensitive)
+/// 2. Word-level AND match: "ingeniero industrial" matches if BOTH words appear anywhere in text
+///    (e.g., matches "Cuerpo de Ingenieros Industriales" because "ingeniero" matches "ingenieros" 
+///    as substring AND "industrial" matches "industriales")
+/// 
+/// Note: For plural forms, use truncated stems like "ingenier" which will match
+/// "ingeniero", "ingenieros", "ingeniería", etc.
+fn keyword_matches(text: &str, keyword: &str) -> bool {
+    // First, try exact phrase match
+    if text.contains(keyword) {
+        return true;
+    }
+    
+    // If keyword has multiple words, try AND matching on each word
+    let words: Vec<&str> = keyword.split_whitespace().filter(|w| !w.is_empty()).collect();
+    if words.len() > 1 {
+        // Check if ALL words appear as substrings in the text
+        return words.iter().all(|word| text.contains(word));
+    }
+    
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_keyword_matches_exact() {
+        let text = "resolucion de ingenieros industriales del estado";
+        assert!(keyword_matches(text, "ingenieros industriales"));
+        assert!(keyword_matches(text, "resolucion"));
+    }
+
+    #[test]
+    fn test_keyword_matches_word_level() {
+        let text = "cuerpo de ingenieros industriales del estado";
+        // "ingeniero industrial" should match because:
+        // - "ingeniero" is in "ingenieros" (substring)
+        // - "industrial" is in "industriales" (substring)
+        assert!(keyword_matches(text, "ingeniero industrial"));
+    }
+
+    #[test]
+    fn test_keyword_matches_partial_fail() {
+        let text = "cuerpo de ingenieros del estado";
+        // Should fail because "industrial" is not in text
+        assert!(!keyword_matches(text, "ingeniero industrial"));
+    }
+
+    #[test]
+    fn test_keyword_matches_with_stem() {
+        let text = "cuerpo de ingenieros industriales del estado";
+        // Using truncated stem "ingenier" matches all variants
+        assert!(keyword_matches(text, "ingenier"));
+        assert!(keyword_matches(text, "industrial"));
+    }
 }

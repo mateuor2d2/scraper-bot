@@ -6,7 +6,7 @@
       </template>
       <form @submit.prevent="doLogin" class="space-y-4">
         <UFormField label="Token de admin">
-          <UInput v-model="token" type="password" placeholder="admin123 o tu telegram_id" class="w-full" />
+          <UInput v-model="token" type="password" placeholder="ADMIN_TOKEN o tu telegram_id" class="w-full" />
         </UFormField>
         <UButton type="submit" color="primary" class="w-full justify-center" :loading="loading">
           Entrar

@@ -70,11 +70,13 @@ pub struct SearchResponse {
 }
 
 fn check_admin_token(state: &ApiState, token: &str) -> bool {
-    // Usar el primer admin como token por simplicidad, o un token en config
-    // Por ahora, token hardcodeado = "admin123" o el telegram_id del primer admin
-    if token == "admin123" {
-        return true;
+    // 1. Variable de entorno ADMIN_TOKEN (recomendado para producción)
+    if let Ok(admin_token) = std::env::var("ADMIN_TOKEN") {
+        if !admin_token.is_empty() && token == admin_token {
+            return true;
+        }
     }
+    // 2. Telegram ID de un admin configurado en config.toml
     if let Ok(id) = token.parse::<i64>() {
         return state.config.bot.admins.contains(&id);
     }

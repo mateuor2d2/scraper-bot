@@ -3,6 +3,18 @@ name = "scraper-bot"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "scraper_bot"
+path = "src/lib.rs"
+
+[[bin]]
+name = "scraper-bot"
+path = "src/main.rs"
+
+[[bin]]
+name = "e2e_report"
+path = "src/bin/e2e_report.rs"
+
 [dependencies]
 tokio = { version = "1.35", features = ["full", "rt-multi-thread"] }
 teloxide = { version = "0.12", features = ["macros"] }
@@ -29,6 +41,9 @@ tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "fs"] }
 rss = "2.0"
 quick-xml = "0.31"
+chromiumoxide = "0.9"
+futures = "0.3"
+futures-util = "0.3"
 
 [dev-dependencies]
 tokio-test = "0.4"

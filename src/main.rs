@@ -1,31 +1,21 @@
-mod config;
-mod db;
-mod handlers;
-mod models;
-mod payments;
-mod scheduler;
-mod scraper;
-mod wizard;
-mod webhook;
-mod auto_learn;
-mod api;
-#[cfg(test)]
-mod tests;
-
 use std::sync::Arc;
 
 use teloxide::prelude::*;
 use teloxide::types::{BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 use teloxide::RequestError;
 
-use crate::config::Config;
-use crate::db::Db;
-use crate::handlers::{
+use scraper_bot::config::Config;
+use scraper_bot::db::Db;
+use scraper_bot::handlers::{
     handle_admin_precio, handle_admin_usuarios, handle_busquedas, handle_callback,
     handle_eliminar_busqueda, handle_help, handle_informe, handle_nueva_busqueda_inline,
     handle_start, handle_suscribirse, BotState,
 };
-use crate::wizard::{WizardData, WizardState, WizardStep};
+use scraper_bot::scheduler;
+use scraper_bot::webhook;
+use scraper_bot::wizard::{self, WizardData, WizardState, WizardStep};
+use scraper_bot::auto_learn;
+use scraper_bot::handlers;
 
 fn map_anyhow<E: std::fmt::Display>(e: E) -> RequestError {
     RequestError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
