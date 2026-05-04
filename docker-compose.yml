@@ -7,26 +7,46 @@ services:
       dockerfile: Dockerfile
     container_name: scraper-bot
     restart: unless-stopped
-    ports:
-      - "8080:8080"
     environment:
       - TELOXIDE_TOKEN=${TELOXIDE_TOKEN}
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
       - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY}
       - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
-      - STRIPE_BASE_URL=${STRIPE_BASE_URL:-https://paas.cima20.io}
+      - STRIPE_BASE_URL=${STRIPE_BASE_URL:-https://api.cima20.io}
       - ADMIN_TOKEN=${ADMIN_TOKEN}
-      - RUST_LOG=info
+      - RUST_LOG=${RUST_LOG:-info}
       - ADMIN_STATIC_DIR=/app/admin
     volumes:
       - scraper-data:/app/data
+    networks:
+      - scraper-bot-frontend
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 15s
+    mem_limit: 512m
+    cpus: 1.0
+    labels:
+      # HTTPS router — hardened
+      - "traefik.enable=true"
+      - "traefik.http.routers.scraper-bot.rule=Host(`api.cima20.io`)"
+      - "traefik.http.routers.scraper-bot.entrypoints=websecure"
+      - "traefik.http.routers.scraper-bot.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.scraper-bot.tls.options=tls-hardened@file"
+      - "traefik.http.routers.scraper-bot.middlewares=public-hardening@file"
+      - "traefik.http.services.scraper-bot.loadbalancer.server.port=8080"
+      - "traefik.docker.network=scraper-bot-frontend"
+      # HTTP router — redirect to HTTPS
+      - "traefik.http.routers.scraper-bot-http.rule=Host(`api.cima20.io`)"
+      - "traefik.http.routers.scraper-bot-http.entrypoints=web"
+      - "traefik.http.routers.scraper-bot-http.middlewares=redirect-to-https@file,public-rate-limit@file"
 
 volumes:
   scraper-data:
     driver: local
+
+networks:
+  scraper-bot-frontend:
+    external: true
