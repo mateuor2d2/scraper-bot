@@ -569,17 +569,17 @@ mod tests {
         // Crear multiples configs de diferentes tipos
         let _: i64 = db.create_search_config(
             12345, "BOE Test 1", "https://boe.es/rss/1", "boe_rss",
-            Some("ingenieros"), None, Some("immediate"),
+            Some("ingenieros"), None, Some("immediate"), None,
         ).await.unwrap();
         
         let _: i64 = db.create_search_config(
             12345, "CAIB Test", "https://caib.es/test", "caib_licitaciones",
-            Some("obras"), None, Some("daily"),
+            Some("obras"), None, Some("daily"), None,
         ).await.unwrap();
         
         let _: i64 = db.create_search_config(
             12345, "BOE Test 2", "https://boe.es/rss/2", "boe_rss",
-            Some("administrativos"), None, Some("immediate"),
+            Some("administrativos"), None, Some("immediate"), None,
         ).await.unwrap();
         
         let configs: Vec<crate::models::SearchConfig> = db.get_user_search_configs(12345).await.unwrap();
@@ -616,6 +616,7 @@ mod integration_tests {
             keywords: Some(keywords.to_string()),
             css_selector: None,
             notify_mode: "immediate".to_string(),
+            filters: None,
             is_active: true,
             created_at: Utc::now().naive_utc(),
             updated_at: Utc::now().naive_utc(),

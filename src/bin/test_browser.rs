@@ -1,6 +1,76 @@
-use chromiumoxide::{Browser, BrowserConfig};
-use futures_util::StreamExt;
+use chromiumoxide::browser::{Browser, BrowserConfig};
+use futures::StreamExt;
 use std::time::Duration;
+
+/// Try to connect to Obscura CDP, or spawn it if not running.
+async fn ensure_obscura_running() -> Option<String> {
+    let port = std::env::var("OBSCURA_PORT").unwrap_or_else(|_| "9222".to_string());
+    let url = format!("http://127.0.0.1:{}/json/version", port);
+
+    if let Ok(resp) = reqwest::get(&url).await {
+        if resp.status().is_success() {
+            println!("Obscura already running on port {}", port);
+            return Some(url);
+        }
+    }
+
+    let obscura_path = std::env::var("OBSCURA_PATH")
+        .unwrap_or_else(|_| "obscura".to_string());
+
+    let mut cmd = tokio::process::Command::new(&obscura_path);
+    cmd.args(["serve", "--port", &port]);
+    if std::env::var("OBSCURA_STEALTH").is_ok() {
+        cmd.arg("--stealth");
+    }
+    cmd.stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    match cmd.spawn() {
+        Ok(_) => {
+            println!("Spawned Obscura, waiting for it to start...");
+            for _ in 0..10 {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                if let Ok(resp) = reqwest::get(&url).await {
+                    if resp.status().is_success() {
+                        println!("Obscura started on port {}", port);
+                        return Some(url);
+                    }
+                }
+            }
+            eprintln!("Obscura started but not responding");
+            None
+        }
+        Err(e) => {
+            eprintln!("Could not spawn Obscura: {}", e);
+            None
+        }
+    }
+}
+
+/// Launch browser: try Obscura first, fall back to Chrome.
+async fn launch_browser() -> anyhow::Result<(Browser, chromiumoxide::handler::Handler)> {
+    // Strategy 1: Explicit OBSCURA_URL
+    if let Ok(obscura_url) = std::env::var("OBSCURA_URL") {
+        println!("Connecting to Obscura at {}", obscura_url);
+        return Browser::connect(&obscura_url).await
+            .map_err(|e| anyhow::anyhow!("Failed to connect to Obscura at {}: {}", obscura_url, e));
+    }
+
+    // Strategy 2: Auto-discover or spawn Obscura
+    if let Some(url) = ensure_obscura_running().await {
+        println!("Connecting to auto-discovered Obscura at {}", url);
+        return Browser::connect(&url).await
+            .map_err(|e| anyhow::anyhow!("Failed to connect to Obscura at {}: {}", url, e));
+    }
+
+    // Strategy 3: Fallback to local Chrome
+    println!("Obscura not available, falling back to local Chrome launch");
+    let config = BrowserConfig::builder()
+        .build()
+        .map_err(|e| anyhow::anyhow!("Browser config error: {}", e))?;
+    Browser::launch(config).await
+        .map_err(|e| anyhow::anyhow!("Failed to launch Chrome: {}", e))
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -8,13 +78,9 @@ async fn main() -> anyhow::Result<()> {
 
     println!("=== Test Browser Automation - ContratacionDelEstado.es ===\n");
 
-    // Launch browser
-    println!("Launching Chrome browser...");
-    let (mut browser, mut handler) = Browser::launch(
-        BrowserConfig::builder()
-            .build()
-            .map_err(|e| anyhow::anyhow!("Browser config error: {}", e))?
-    ).await?;
+    // Launch browser (Obscura or Chrome fallback)
+    println!("Launching browser...");
+    let (mut browser, mut handler) = launch_browser().await?;
 
     // Spawn handler task
     tokio::spawn(async move {
@@ -189,6 +255,7 @@ async fn main() -> anyhow::Result<()> {
     println!("Page check: {:?}", content_check.value());
 
     // Close browser
+    // With Browser::connect, close() sends CDP Browser.close but doesn't kill Obscura.
     browser.close().await?;
     println!("\nBrowser closed successfully.");
 

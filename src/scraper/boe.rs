@@ -3,6 +3,7 @@ use chrono::NaiveDateTime;
 use reqwest::Client;
 use rss::Channel;
 
+use crate::filters::FilterConfig;
 use crate::models::SearchConfig;
 use crate::scraper::ScrapedItem;
 
@@ -38,6 +39,11 @@ pub async fn scrape(config: &SearchConfig) -> Result<Vec<ScrapedItem>> {
         .filter(|s| !s.is_empty())
         .collect();
 
+    // Parsear filtros avanzados si existen
+    let filter_config = config.filters.as_deref()
+        .map(FilterConfig::parse)
+        .unwrap_or_default();
+
     let mut items = Vec::new();
 
     for item in channel.items() {
@@ -58,6 +64,18 @@ pub async fn scrape(config: &SearchConfig) -> Result<Vec<ScrapedItem>> {
             if !keywords.iter().any(|kw| keyword_matches(&text, kw)) {
                 continue;
             }
+        }
+
+        // Aplicar filtros avanzados (include/exclude)
+        let full_text = format!(
+            "{} {} {}",
+            title,
+            description.as_deref().unwrap_or(""),
+            link.as_deref().unwrap_or("")
+        );
+        if !filter_config.matches(&full_text) {
+            tracing::debug!("BOE item filtrado por filters: {}", title);
+            continue;
         }
 
         // Generar ID externo a partir del GUID o del link

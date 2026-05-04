@@ -11,10 +11,67 @@ use crate::scraper::ScrapedItem;
 const BASE_URL: &str = "https://contrataciondelestado.es/wps/portal/plataforma/buscador/";
 const DETAIL_URL_BASE: &str = "https://contrataciondelestado.es/wps/poc?uri=deeplink:detalle_licitacion&idEvl=";
 
+/// Try to connect to an already-running Obscura CDP instance, or spawn one if not running.
+///
+/// Returns the CDP websocket URL (e.g. `ws://127.0.0.1:9222/devtools/browser`) if successful, None otherwise.
+///
+/// NOTE: Not used by contratacion_estado.rs anymore (Chrome-only now). Kept for potential
+/// future use. Other modules (e.g. borm.rs) use the Obscura CLI directly, not this CDP path.
+#[allow(dead_code)]
+pub async fn ensure_obscura_running() -> Option<String> {
+    let port = std::env::var("OBSCURA_PORT").unwrap_or_else(|_| "9222".to_string());
+    let ws_url = format!("ws://127.0.0.1:{}/devtools/browser", port);
+    let addr = format!("127.0.0.1:{}", port);
+
+    // Check if already running via TCP port check (Obscura does NOT serve HTTP endpoints)
+    if tokio::net::TcpStream::connect(&addr).await.is_ok() {
+        tracing::info!("Obscura already running on port {} (TCP port open)", port);
+        return Some(ws_url);
+    }
+
+    // Try to spawn Obscura
+    let obscura_path = std::env::var("OBSCURA_PATH")
+        .unwrap_or_else(|_| "obscura".to_string());
+
+    let mut cmd = tokio::process::Command::new(&obscura_path);
+    cmd.args(["serve", "--port", &port]);
+    // Optionally add --stealth
+    if std::env::var("OBSCURA_STEALTH").is_ok() {
+        cmd.arg("--stealth");
+    }
+    cmd.stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    match cmd.spawn() {
+        Ok(_child) => {
+            tracing::info!("Spawned Obscura process, waiting for it to become ready...");
+            // Wait up to 3 seconds (15 × 200ms) for it to start
+            for _ in 0..15 {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                if tokio::net::TcpStream::connect(&addr).await.is_ok() {
+                    tracing::info!("Obscura started and listening on port {}", port);
+                    return Some(ws_url);
+                }
+            }
+            tracing::warn!("Obscura started but not listening after 3s");
+            None
+        }
+        Err(e) => {
+            tracing::warn!("Could not spawn Obscura: {}", e);
+            None
+        }
+    }
+}
+
 /// Scraper para contrataciondelestado.es usando browser automation (chromiumoxide).
 ///
+/// # Conexión al browser:
+/// - Lanza Chrome/Chromium directamente (no usa Obscura).
+/// - El portal contrataciondelestado.es es una app JSF/WebSphere que requiere
+///   Chrome completo — el motor JS de Obscura no puede manejarlo.
+///
 /// # Limitaciones conocidas:
-/// - Requiere Chrome/Chromium instalado en el sistema o accesible via CDP.
+/// - Requiere Chrome/Chromium instalado en el sistema o CHROME_PATH configurado.
 /// - El portal usa JSF con ViewState dinámico, por lo que no funciona con HTTP simple.
 /// - Los tiempos de carga pueden variar; se usan timeouts de 30s para navegación.
 /// - El buscador del portal a veces devuelve documentos en lugar de licitaciones directamente.
@@ -37,13 +94,12 @@ pub async fn scrape(config: &SearchConfig) -> Result<Vec<ScrapedItem>> {
 
     let keyword = keywords.first().cloned().unwrap_or_else(|| "prevención de riesgos".to_string());
 
-    // Intentar lanzar el browser
+    // Launch Chrome directly — no Obscura
     let (mut browser, handler) = match launch_browser().await {
         Some((b, h)) => (b, h),
         None => {
             tracing::warn!(
-                "Chrome/Chromium no disponible. Scraper de contrataciondelestado.es no puede funcionar sin browser. \
-                 Instala Chrome o configura CHROME_PATH para habilitar este scraper."
+                "No se pudo lanzar Chrome. Configura CHROME_PATH o instala Chrome/Chromium."
             );
             return Ok(Vec::new());
         }
@@ -62,7 +118,7 @@ pub async fn scrape(config: &SearchConfig) -> Result<Vec<ScrapedItem>> {
 
     let result = scrape_with_browser(&mut browser, &keyword).await;
 
-    // Cerrar el browser
+    // Close browser — kills the child process since we launched it
     if let Err(e) = browser.close().await {
         tracing::warn!("Error cerrando browser: {}", e);
     }
@@ -70,23 +126,33 @@ pub async fn scrape(config: &SearchConfig) -> Result<Vec<ScrapedItem>> {
     result
 }
 
+/// Launch Chrome/Chromium directly for contrataciondelestado.es scraping.
+///
+/// Uses CHROME_PATH env var or auto-discovers the Chrome binary.
+/// Launches headless with `--remote-debugging-port=0` (auto-assign free port).
 async fn launch_browser() -> Option<(Browser, chromiumoxide::handler::Handler)> {
-    // Buscar Chrome si no está en CHROME_PATH
+    tracing::info!("Launching Chrome directly for contrataciondelestado.es");
+    launch_chrome().await
+}
+
+/// Launch a local Chrome/Chromium instance with headless config.
+async fn launch_chrome() -> Option<(Browser, chromiumoxide::handler::Handler)> {
     let chrome_path = std::env::var("CHROME_PATH")
         .ok()
         .or_else(|| find_chrome_binary());
 
-    // Configuración del browser
     let mut builder = BrowserConfig::builder()
         .no_sandbox()
         .arg("--disable-dev-shm-usage")
         .arg("--disable-gpu")
         .arg("--disable-web-security")
         .arg("--disable-features=IsolateOrigins,site-per-process")
+        .arg("--remote-debugging-port=0")
         .arg("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .viewport(None);
 
     if let Some(path) = chrome_path {
+        tracing::info!("Using Chrome at: {}", path);
         builder = builder.chrome_executable(path);
     }
 
@@ -99,7 +165,10 @@ async fn launch_browser() -> Option<(Browser, chromiumoxide::handler::Handler)> 
     };
 
     match Browser::launch(config).await {
-        Ok((browser, handler)) => Some((browser, handler)),
+        Ok((browser, handler)) => {
+            tracing::info!("Chrome launched successfully");
+            Some((browser, handler))
+        }
         Err(e) => {
             tracing::warn!("No se pudo lanzar Chrome: {}", e);
             None
@@ -107,6 +176,7 @@ async fn launch_browser() -> Option<(Browser, chromiumoxide::handler::Handler)> 
     }
 }
 
+/// Find Chrome/Chromium binary on the system.
 fn find_chrome_binary() -> Option<String> {
     let possible_paths = [
         "/usr/bin/google-chrome",
@@ -114,6 +184,7 @@ fn find_chrome_binary() -> Option<String> {
         "/usr/bin/chromium",
         "/usr/bin/chromium-browser",
         "/usr/local/bin/chrome",
+        "/home/oc/chrome/opt/google/chrome/chrome",
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
         "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
@@ -142,10 +213,13 @@ fn find_chrome_binary() -> Option<String> {
 }
 
 async fn scrape_with_browser(browser: &mut Browser, keyword: &str) -> Result<Vec<ScrapedItem>> {
-    let page = browser
-        .new_page(BASE_URL)
-        .await
-        .context("No se pudo crear nueva página")?;
+    let page = match browser.new_page(BASE_URL).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("Error creating page: {}", e);
+            return Ok(Vec::new());
+        }
+    };
 
     // Esperar a que la página cargue
     tokio::time::sleep(Duration::from_secs(3)).await;

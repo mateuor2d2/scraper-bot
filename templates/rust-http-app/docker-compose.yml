@@ -1,0 +1,84 @@
+# docker-compose.yml — cima20paas deployment template with Traefik (hardened)
+# Copy .env.example to .env and fill in values before deploying.
+
+services:
+  app:
+    image: ${DOCKER_IMAGE:-ghcr.io/${GITHUB_REPO_OWNER:-example}/${GITHUB_REPO_NAME:-rust-http-app}:${IMAGE_TAG:-latest}}
+    container_name: ${COMPOSE_PROJECT_NAME:-rust-http-app}
+    restart: unless-stopped
+
+    # ── Security: run as non-root user ──────────────────────────────
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+
+    # ── Resource limits ─────────────────────────────────────────────
+    mem_limit: 256m
+    cpus: 0.5
+    memswap_limit: 256m
+    pids_limit: 100
+
+    # ── Environment (from .env) ─────────────────────────────────────
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+      - APP_PORT=${APP_PORT:-8080}
+      - DATABASE_URL=${DATABASE_URL:-}
+      - APP_DATA_DIR=${APP_DATA_DIR:-/app/data}
+
+    # ── Named volume ────────────────────────────────────────────────
+    volumes:
+      - app-data:${APP_DATA_DIR:-/app/data}
+
+    # ── Network ─────────────────────────────────────────────────────
+    networks:
+      - frontend
+
+    # ── Health check ────────────────────────────────────────────────
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:${APP_PORT:-8080}/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # ── Traefik labels (hardened) ───────────────────────────────────
+    labels:
+      # Enable Traefik
+      traefik.enable: "true"
+
+      # ── Docker provider network ───────────────────────────────────
+      traefik.docker.network: ${TRAEFIK_NETWORK:-MYAPP-frontend}
+
+      # ── HTTP router → redirect to HTTPS ───────────────────────────
+      traefik.http.routers.${COMPOSE_PROJECT_NAME:-rust-http-app}-http.rule: "Host(`${TRAEFIK_HOST:-app.example.com}`)"
+      traefik.http.routers.${COMPOSE_PROJECT_NAME:-rust-http-app}-http.entrypoints: web
+      traefik.http.routers.${COMPOSE_PROJECT_NAME:-rust-http-app}-http.middlewares: redirect-to-https@file
+
+      # ── HTTPS router (main) ───────────────────────────────────────
+      traefik.http.routers.${COMPOSE_PROJECT_NAME:-rust-http-app}.rule: "Host(`${TRAEFIK_HOST:-app.example.com}`)"
+      traefik.http.routers.${COMPOSE_PROJECT_NAME:-rust-http-app}.entrypoints: websecure
+      traefik.http.routers.${COMPOSE_PROJECT_NAME:-rust-http-app}.tls: "true"
+      traefik.http.routers.${COMPOSE_PROJECT_NAME:-rust-http-app}.tls.certresolver: letsencrypt
+      traefik.http.routers.${COMPOSE_PROJECT_NAME:-rust-http-app}.tls.options: tls-hardened@file
+      traefik.http.routers.${COMPOSE_PROJECT_NAME:-rust-http-app}.middlewares: public-hardening@file
+
+      # ── Load balancer (port from .env) ────────────────────────────
+      traefik.http.services.${COMPOSE_PROJECT_NAME:-rust-http-app}.loadbalancer.server.port: "${APP_PORT:-8080}"
+
+    # ── Read-only rootfs + minimal capabilities ─────────────────────
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+# ── Named volumes ───────────────────────────────────────────────────
+volumes:
+  app-data:
+    driver: local
+
+# ── Networks ────────────────────────────────────────────────────────
+networks:
+  frontend:
+    external: true
+    name: ${TRAEFIK_NETWORK:-MYAPP-frontend}

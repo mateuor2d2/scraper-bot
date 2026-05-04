@@ -111,10 +111,11 @@ impl Db {
         keywords: Option<&str>,
         css_selector: Option<&str>,
         notify_mode: Option<&str>,
+        filters: Option<&str>,
     ) -> anyhow::Result<i64> {
         let mode = notify_mode.unwrap_or("daily");
         let res = sqlx::query(
-            "INSERT INTO search_configs (telegram_id, name, url, search_type, keywords, css_selector, notify_mode) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO search_configs (telegram_id, name, url, search_type, keywords, css_selector, notify_mode, filters) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(telegram_id)
         .bind(name)
@@ -123,6 +124,7 @@ impl Db {
         .bind(keywords)
         .bind(css_selector)
         .bind(mode)
+        .bind(filters)
         .execute(&self.pool)
         .await?;
         Ok(res.last_insert_rowid())
@@ -158,6 +160,48 @@ impl Db {
             .bind(telegram_id)
             .execute(&self.pool)
             .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    pub async fn update_search_config(
+        &self,
+        id: i64,
+        telegram_id: i64,
+        name: Option<&str>,
+        url: Option<&str>,
+        search_type: Option<&str>,
+        keywords: Option<&str>,
+        css_selector: Option<&str>,
+        notify_mode: Option<&str>,
+        filters: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        let mut query = String::from("UPDATE search_configs SET updated_at = CURRENT_TIMESTAMP");
+        let mut has_updates = false;
+        
+        if name.is_some() { query.push_str(", name = ?"); has_updates = true; }
+        if url.is_some() { query.push_str(", url = ?"); has_updates = true; }
+        if search_type.is_some() { query.push_str(", search_type = ?"); has_updates = true; }
+        if keywords.is_some() { query.push_str(", keywords = ?"); has_updates = true; }
+        if css_selector.is_some() { query.push_str(", css_selector = ?"); has_updates = true; }
+        if notify_mode.is_some() { query.push_str(", notify_mode = ?"); has_updates = true; }
+        if filters.is_some() { query.push_str(", filters = ?"); has_updates = true; }
+        
+        if !has_updates {
+            return Ok(false);
+        }
+        
+        query.push_str(" WHERE id = ? AND telegram_id = ?");
+        
+        let mut q = sqlx::query(&query);
+        if let Some(v) = name { q = q.bind(v); }
+        if let Some(v) = url { q = q.bind(v); }
+        if let Some(v) = search_type { q = q.bind(v); }
+        if let Some(v) = keywords { q = q.bind(v); }
+        if let Some(v) = css_selector { q = q.bind(v); }
+        if let Some(v) = notify_mode { q = q.bind(v); }
+        if let Some(v) = filters { q = q.bind(v); }
+        
+        let res = q.bind(id).bind(telegram_id).execute(&self.pool).await?;
         Ok(res.rows_affected() > 0)
     }
 

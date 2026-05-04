@@ -2,6 +2,7 @@ pub mod api;
 pub mod auto_learn;
 pub mod config;
 pub mod db;
+pub mod filters;
 pub mod handlers;
 pub mod models;
 pub mod payments;

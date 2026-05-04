@@ -1,4 +1,5 @@
 use std::sync::Arc;
+
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -12,11 +13,7 @@ use serde_json::json;
 use crate::db::Db;
 use crate::config::Config;
 
-#[derive(Clone)]
-pub struct ApiState {
-    pub db: Arc<Db>,
-    pub config: Arc<Config>,
-}
+use super::AdminApiState;
 
 #[derive(Deserialize)]
 pub struct AdminQuery {
@@ -69,21 +66,19 @@ pub struct SearchResponse {
     pub result_count: i64,
 }
 
-fn check_admin_token(state: &ApiState, token: &str) -> bool {
-    // 1. Variable de entorno ADMIN_TOKEN (recomendado para producción)
+fn check_admin_token(state: &AdminApiState, token: &str) -> bool {
     if let Ok(admin_token) = std::env::var("ADMIN_TOKEN") {
         if !admin_token.is_empty() && token == admin_token {
             return true;
         }
     }
-    // 2. Telegram ID de un admin configurado en config.toml
     if let Ok(id) = token.parse::<i64>() {
         return state.config.bot.admins.contains(&id);
     }
     false
 }
 
-pub fn router(state: ApiState) -> Router {
+pub fn router(state: AdminApiState) -> Router {
     Router::new()
         .route("/api/admin/dashboard", get(dashboard))
         .route("/api/admin/users", get(list_users))
@@ -99,7 +94,7 @@ async fn health() -> impl IntoResponse {
 }
 
 async fn dashboard(
-    State(state): State<ApiState>,
+    State(state): State<AdminApiState>,
     Query(params): Query<AdminQuery>,
 ) -> impl IntoResponse {
     if !check_admin_token(&state, &params.token) {
@@ -118,7 +113,7 @@ async fn dashboard(
 
     let today = chrono::Local::now().naive_local().date().to_string();
     let total_results_today: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM search_results WHERE DATE(scraped_at) = ?"
+        "SELECT COUNT(*) FROM search_results WHERE DATE(scraped_at) = ?",
     )
     .bind(&today)
     .fetch_one(&state.db.pool)
@@ -126,22 +121,23 @@ async fn dashboard(
     .unwrap_or(0);
 
     let active_subscriptions: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM subscriptions WHERE status = 'active'"
+        "SELECT COUNT(*) FROM subscriptions WHERE status = 'active'",
     )
     .fetch_one(&state.db.pool)
     .await
     .unwrap_or(0);
 
     let recent_scrapes = match sqlx::query_as::<_, crate::db::ScrapeLog>(
-        "SELECT * FROM scrape_logs ORDER BY created_at DESC LIMIT 20"
+        "SELECT * FROM scrape_logs ORDER BY created_at DESC LIMIT 20",
     )
     .fetch_all(&state.db.pool)
-    .await {
+    .await
+    {
         Ok(logs) => {
             let mut result = Vec::new();
             for log in logs {
                 let config_name: String = sqlx::query_scalar(
-                    "SELECT name FROM search_configs WHERE id = ?"
+                    "SELECT name FROM search_configs WHERE id = ?",
                 )
                 .bind(log.search_config_id)
                 .fetch_one(&state.db.pool)
@@ -176,29 +172,37 @@ async fn dashboard(
 }
 
 async fn list_users(
-    State(state): State<ApiState>,
+    State(state): State<AdminApiState>,
     Query(params): Query<AdminQuery>,
 ) -> impl IntoResponse {
     if !check_admin_token(&state, &params.token) {
         return (StatusCode::UNAUTHORIZED, Json(json!({"error": "Unauthorized"}))).into_response();
     }
 
-    let users = match sqlx::query_as::<_, crate::models::User>("SELECT * FROM users ORDER BY created_at DESC LIMIT 100")
-        .fetch_all(&state.db.pool)
-        .await {
+    let users = match sqlx::query_as::<_, crate::models::User>(
+        "SELECT * FROM users ORDER BY created_at DESC LIMIT 100",
+    )
+    .fetch_all(&state.db.pool)
+    .await
+    {
         Ok(users) => users,
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response();
         }
     };
 
     let mut result = Vec::new();
     for user in users {
-        let search_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM search_configs WHERE telegram_id = ?")
-            .bind(user.telegram_id)
-            .fetch_one(&state.db.pool)
-            .await
-            .unwrap_or(0);
+        let search_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM search_configs WHERE telegram_id = ?")
+                .bind(user.telegram_id)
+                .fetch_one(&state.db.pool)
+                .await
+                .unwrap_or(0);
 
         result.push(UserResponse {
             telegram_id: user.telegram_id,
@@ -215,7 +219,7 @@ async fn list_users(
 }
 
 async fn list_searches(
-    State(state): State<ApiState>,
+    State(state): State<AdminApiState>,
     Query(params): Query<AdminQuery>,
 ) -> impl IntoResponse {
     if !check_admin_token(&state, &params.token) {
@@ -223,23 +227,29 @@ async fn list_searches(
     }
 
     let searches = match sqlx::query_as::<_, crate::models::SearchConfig>(
-        "SELECT * FROM search_configs ORDER BY created_at DESC LIMIT 200"
+        "SELECT * FROM search_configs ORDER BY created_at DESC LIMIT 200",
     )
     .fetch_all(&state.db.pool)
-    .await {
+    .await
+    {
         Ok(searches) => searches,
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response();
         }
     };
 
     let mut result = Vec::new();
     for search in searches {
-        let result_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM search_results WHERE search_config_id = ?")
-            .bind(search.id)
-            .fetch_one(&state.db.pool)
-            .await
-            .unwrap_or(0);
+        let result_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM search_results WHERE search_config_id = ?")
+                .bind(search.id)
+                .fetch_one(&state.db.pool)
+                .await
+                .unwrap_or(0);
 
         result.push(SearchResponse {
             id: search.id,
@@ -271,7 +281,7 @@ pub struct ResultResponse {
 }
 
 async fn list_results(
-    State(state): State<ApiState>,
+    State(state): State<AdminApiState>,
     Query(params): Query<AdminQuery>,
 ) -> impl IntoResponse {
     if !check_admin_token(&state, &params.token) {
@@ -282,32 +292,40 @@ async fn list_results(
         "SELECT r.id, r.search_config_id, r.title, r.description, r.url, r.external_id, r.raw_data, r.published_at, r.scraped_at, r.notified, c.name as config_name
          FROM search_results r
          JOIN search_configs c ON r.search_config_id = c.id
-         ORDER BY r.scraped_at DESC LIMIT 100"
+         ORDER BY r.scraped_at DESC LIMIT 100",
     )
     .fetch_all(&state.db.pool)
-    .await {
+    .await
+    {
         Ok(results) => results,
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response();
         }
     };
 
-    let response: Vec<ResultResponse> = results.into_iter().map(|r| ResultResponse {
-        id: r.id,
-        search_config_id: r.search_config_id,
-        config_name: r.config_name,
-        title: r.title,
-        url: r.url,
-        external_id: r.external_id,
-        scraped_at: r.scraped_at.to_string(),
-        notified: r.notified,
-    }).collect();
+    let response: Vec<ResultResponse> = results
+        .into_iter()
+        .map(|r| ResultResponse {
+            id: r.id,
+            search_config_id: r.search_config_id,
+            config_name: r.config_name,
+            title: r.title,
+            url: r.url,
+            external_id: r.external_id,
+            scraped_at: r.scraped_at.to_string(),
+            notified: r.notified,
+        })
+        .collect();
 
     (StatusCode::OK, Json(response)).into_response()
 }
 
 async fn list_logs(
-    State(state): State<ApiState>,
+    State(state): State<AdminApiState>,
     Query(params): Query<AdminQuery>,
 ) -> impl IntoResponse {
     if !check_admin_token(&state, &params.token) {
@@ -315,13 +333,18 @@ async fn list_logs(
     }
 
     let logs = match sqlx::query_as::<_, crate::db::ScrapeLog>(
-        "SELECT * FROM scrape_logs ORDER BY created_at DESC LIMIT 100"
+        "SELECT * FROM scrape_logs ORDER BY created_at DESC LIMIT 100",
     )
     .fetch_all(&state.db.pool)
-    .await {
+    .await
+    {
         Ok(logs) => logs,
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response();
         }
     };
 

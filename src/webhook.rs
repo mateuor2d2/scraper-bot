@@ -13,6 +13,7 @@ use serde::Deserialize;
 
 use crate::db::Db;
 use crate::config::Config;
+use crate::api::rate_limit::RateLimiter;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -169,7 +170,6 @@ async fn handle_stripe_webhook(
         "invoice.payment_failed" => {
             if let Some(customer) = payload.data.object.get("customer").and_then(|v| v.as_str()) {
                 tracing::warn!("Pago fallido para cliente Stripe: {}", customer);
-                // Opcional: marcar suscripción como past_due
                 if let Err(e) = state.db.set_subscription_status_by_customer(customer, "past_due").await {
                     tracing::error!("Error actualizando estado de suscripción: {}", e);
                 }
@@ -189,9 +189,37 @@ async fn handle_stripe_webhook(
     StatusCode::OK
 }
 
+/// Start the combined HTTP server: webhook + admin API + public API.
 pub async fn start_webhook_server(db: Arc<Db>, config: Arc<Config>, port: u16) -> anyhow::Result<()> {
-    let state = AppState { db: db.clone(), config: config.clone() };
-    let api_state = crate::api::ApiState { db, config };
+    let rate_limiter = Arc::new(RateLimiter::new());
+
+    // Start rate limiter cleanup task
+    let cleanup_limiter = Arc::clone(&rate_limiter);
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
+            cleanup_limiter.cleanup().await;
+        }
+    });
+
+    // Webhook state
+    let webhook_state = AppState {
+        db: Arc::clone(&db),
+        config: Arc::clone(&config),
+    };
+
+    // Admin API state
+    let admin_state = crate::api::AdminApiState {
+        db: Arc::clone(&db),
+        config: Arc::clone(&config),
+    };
+
+    // Public API state
+    let public_state = crate::api::PublicApiState {
+        db: Arc::clone(&db),
+        config: Arc::clone(&config),
+        rate_limiter,
+    };
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -201,8 +229,9 @@ pub async fn start_webhook_server(db: Arc<Db>, config: Arc<Config>, port: u16) -
     let static_dir = std::env::var("ADMIN_STATIC_DIR").unwrap_or_else(|_| "admin/.output/public".to_string());
     let index_path = format!("{}/index.html", static_dir);
 
-    let app = router(state)
-        .merge(crate::api::router(api_state))
+    let app = router(webhook_state)
+        .merge(crate::api::admin_router(admin_state))
+        .merge(crate::api::public_router(public_state))
         .fallback_service(
             ServeDir::new(&static_dir)
                 .fallback(ServeFile::new(&index_path))
@@ -212,6 +241,7 @@ pub async fn start_webhook_server(db: Arc<Db>, config: Arc<Config>, port: u16) -
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
     tracing::info!("Servidor webhook/API escuchando en puerto {}", port);
     tracing::info!("Admin panel servido desde: {}", static_dir);
+    tracing::info!("Public API v1 available at /api/v1/");
     axum::serve(listener, app).await?;
     Ok(())
 }

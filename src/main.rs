@@ -16,6 +16,7 @@ use scraper_bot::webhook;
 use scraper_bot::wizard::{self, WizardData, WizardState, WizardStep};
 use scraper_bot::auto_learn;
 use scraper_bot::handlers;
+use scraper_bot::filters::FilterConfig;
 
 fn map_anyhow<E: std::fmt::Display>(e: E) -> RequestError {
     RequestError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
@@ -134,7 +135,7 @@ async fn handle_commands(
 ) -> Result<(), RequestError> {
     match cmd {
         Command::Start => handle_start(bot, msg, state).await.map_err(|e| map_anyhow(e)),
-        Command::Help => handle_help(bot, msg).await.map_err(|e| map_anyhow(e)),
+        Command::Help => handle_help(bot, msg, state.clone()).await.map_err(|e| map_anyhow(e)),
         Command::Busquedas => handle_busquedas(bot, msg, state).await.map_err(|e| map_anyhow(e)),
         Command::NuevaBusqueda(args) => {
             let args = args.trim();
@@ -163,6 +164,10 @@ async fn handle_text_messages(
     if let Some(text) = msg.clone().text() {
         if let Some(wiz) = wizard::get_wizard_state(user_id) {
             return handle_wizard_text(bot, msg, state, wiz, text.to_string()).await.map_err(|e| map_anyhow(e));
+        }
+
+        if let Some(edit) = wizard::get_edit_state(user_id) {
+            return handle_edit_text(bot, msg, state, edit, text.to_string()).await.map_err(|e| map_anyhow(e));
         }
 
         bot.send_message(
@@ -290,11 +295,32 @@ async fn handle_wizard_text(
                 ..wiz.data.clone()
             };
             wizard::update_wizard_data(user_id, data);
+            wizard::set_wizard_step(user_id, WizardStep::AskFilters);
+
+            bot.send_message(
+                chat_id,
+                "✅ Selector guardado.\n\nPaso 6/7: ¿Quieres añadir filtros avanzados?\n\n\
+                <b>Formato:</b>\n\
+                • <code>+Baleares,+Mallorca</code> (solo resultados que contengan ambas)\n\
+                • <code>-Cáceres,-expirado</code> (excluir)\n\
+                • <code>+Baleares,-Cáceres</code> (combinado)\n\n\
+                Envía un punto (<code>.</code>) para omitir filtros.",
+            )
+            .parse_mode(ParseMode::Html)
+            .reply_markup(cancel_keyboard())
+            .await?;
+        }
+        WizardStep::AskFilters => {
+            let data = WizardData {
+                filters: if text.trim() == "." { None } else { Some(text.clone()) },
+                ..wiz.data.clone()
+            };
+            wizard::update_wizard_data(user_id, data);
             wizard::set_wizard_step(user_id, WizardStep::AskNotifyMode);
 
             bot.send_message(
                 chat_id,
-                "✅ Selector guardado.\n\nPaso 6/6: ¿Cómo quieres recibir las notificaciones?",
+                "✅ Filtros guardados.\n\nPaso 7/7: ¿Cómo quieres recibir las notificaciones?",
             )
             .reply_markup(InlineKeyboardMarkup::new(vec![
                 vec![InlineKeyboardButton::callback("🚨 Inmediatas (alerta al detectar)", "wiz:notify:immediate")],
@@ -316,8 +342,116 @@ async fn handle_wizard_text(
 }
 
 fn cancel_keyboard() -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-        "❌ Cancelar wizard",
-        "wiz:cancel",
-    )]])
+    InlineKeyboardMarkup::new(vec![
+        vec![InlineKeyboardButton::callback("❌ Cancelar wizard", "wiz:cancel")],
+        vec![
+            InlineKeyboardButton::callback("◀️ Atrás", "menu:busquedas"),
+            InlineKeyboardButton::callback("🏠 Inicio", "menu:start"),
+        ],
+    ])
+}
+
+async fn handle_edit_text(
+    bot: Bot,
+    msg: Message,
+    _state: Arc<BotState>,
+    edit: wizard::EditState,
+    text: String,
+) -> anyhow::Result<()> {
+    use crate::wizard::{self, EditStep};
+
+    let user_id = msg.from().map(|u| u.id.0 as i64).unwrap_or(0);
+    let chat_id = msg.chat.id;
+
+    match edit.step {
+        EditStep::EditName => {
+            let mut new_data = edit.data.clone();
+            new_data.name = Some(text.clone());
+            wizard::update_edit_data(user_id, new_data.clone());
+            wizard::set_edit_step(user_id, EditStep::Confirm);
+            bot.send_message(
+                chat_id,
+                format!("✅ Nombre actualizado a: <b>{}</b>\n\n¿Quieres modificar algo más?", text),
+            )
+            .parse_mode(ParseMode::Html)
+            .reply_markup(edit_more_keyboard())
+            .await?;
+        }
+        EditStep::EditUrl => {
+            let mut new_data = edit.data.clone();
+            new_data.url = Some(text.clone());
+            wizard::update_edit_data(user_id, new_data.clone());
+            wizard::set_edit_step(user_id, EditStep::Confirm);
+            bot.send_message(
+                chat_id,
+                format!("✅ URL actualizada a: <b>{}</b>\n\n¿Quieres modificar algo más?", text),
+            )
+            .parse_mode(ParseMode::Html)
+            .reply_markup(edit_more_keyboard())
+            .await?;
+        }
+        EditStep::EditKeywords => {
+            let mut new_data = edit.data.clone();
+            new_data.keywords = if text.trim().is_empty() || text.trim() == "." { None } else { Some(text.clone()) };
+            wizard::update_edit_data(user_id, new_data.clone());
+            wizard::set_edit_step(user_id, EditStep::Confirm);
+            bot.send_message(
+                chat_id,
+                format!("✅ Palabras clave actualizadas a: <b>{}</b>\n\n¿Quieres modificar algo más?", new_data.keywords.as_deref().unwrap_or("(ninguna)")),
+            )
+            .parse_mode(ParseMode::Html)
+            .reply_markup(edit_more_keyboard())
+            .await?;
+        }
+        EditStep::EditSelector => {
+            let mut new_data = edit.data.clone();
+            new_data.css_selector = if text.trim().is_empty() || text.trim() == "." { None } else { Some(text.clone()) };
+            wizard::update_edit_data(user_id, new_data.clone());
+            wizard::set_edit_step(user_id, EditStep::Confirm);
+            bot.send_message(
+                chat_id,
+                format!("✅ Selector CSS actualizado a: <code>{}</code>\n\n¿Quieres modificar algo más?", new_data.css_selector.as_deref().unwrap_or("(ninguno)")),
+            )
+            .parse_mode(ParseMode::Html)
+            .reply_markup(edit_more_keyboard())
+            .await?;
+        }
+        EditStep::EditNotifyMode => {
+            bot.send_message(chat_id, "Por favor selecciona una opción del menú de notificación.").await?;
+        }
+        EditStep::EditFilters => {
+            let mut new_data = edit.data.clone();
+            new_data.filters = if text.trim().is_empty() || text.trim() == "." { None } else { Some(text.clone()) };
+            wizard::update_edit_data(user_id, new_data.clone());
+            wizard::set_edit_step(user_id, EditStep::Confirm);
+            let display = new_data.filters.as_deref()
+                .map(|f| FilterConfig::parse(f).to_display_string())
+                .unwrap_or_else(|| "(sin filtros)".to_string());
+            bot.send_message(
+                chat_id,
+                format!("✅ Filtros actualizados: <b>{}</b>\n\n¿Quieres modificar algo más?", display),
+            )
+            .parse_mode(ParseMode::Html)
+            .reply_markup(edit_more_keyboard())
+            .await?;
+        }
+        EditStep::ChooseField | EditStep::Confirm => {
+            bot.send_message(chat_id, "Usa los botones de arriba para seleccionar una acción.").await?;
+        }
+    }
+
+    Ok(())
+}
+
+fn edit_more_keyboard() -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![
+        vec![
+            InlineKeyboardButton::callback("✏️ Modificar otro campo", "editfield:menu"),
+            InlineKeyboardButton::callback("✅ Guardar todo", "editsave"),
+        ],
+        vec![
+            InlineKeyboardButton::callback("◀️ Atrás", "menu:busquedas"),
+            InlineKeyboardButton::callback("🏠 Inicio", "menu:start"),
+        ],
+    ])
 }

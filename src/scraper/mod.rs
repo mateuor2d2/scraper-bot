@@ -12,8 +12,12 @@ pub struct ScrapedItem {
 }
 
 pub mod boe;
+pub mod boc_canarias;
+pub mod bocyl;
+pub mod borm;
 pub mod caib;
 pub mod contratacion_estado;
+pub mod doe;
 pub mod generic;
 
 use crate::models::SearchConfig;
@@ -24,6 +28,10 @@ pub async fn run_scrape(config: &SearchConfig) -> Result<Vec<ScrapedItem>> {
         "generic_html" => generic::scrape_html(config).await,
         "boe_rss" => boe::scrape(config).await,
         "caib_licitaciones" => caib::scrape(config).await,
+        "bocyl_rss" => bocyl::scrape(config).await,
+        "doe_rss" => doe::scrape(config).await,
+        "boc_canarias_rss" => boc_canarias::scrape(config).await,
+        "borm_murcia" => borm::scrape(config).await,
         _ => generic::scrape_html(config).await,
     }
 }

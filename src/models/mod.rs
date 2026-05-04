@@ -24,6 +24,7 @@ pub struct SearchConfig {
     pub keywords: Option<String>,
     pub css_selector: Option<String>,
     pub notify_mode: String,
+    pub filters: Option<String>,
     pub is_active: bool,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,

@@ -20,22 +20,23 @@ RUN cargo build --release
 FROM debian:bookworm-slim
 WORKDIR /app
 
-# Install Chromium + dependencies for browser automation
+# Minimal runtime deps (no Chromium!)
 RUN apt-get update && apt-get install -y \
     ca-certificates curl \
-    chromium chromium-driver \
-    fonts-liberation libappindicator3-1 libasound2 libatk-bridge2.0-0 \
-    libatk1.0-0 libc6 libcairo2 libcups2 libdbus-1-3 libexpat1 \
-    libfontconfig1 libgbm1 libgcc1 libglib2.0-0 libgtk-3-0 libnspr4 \
-    libnss3 libpango-1.0-0 libpangocairo-1.0-0 libstdc++6 libx11-6 \
-    libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxdamage1 \
-    libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 libxss1 \
-    libxtst6 lsb-release wget xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Tell chromiumoxide where to find Chrome
-ENV CHROME_PATH=/usr/bin/chromium
-ENV CHROMIUM_FLAGS="--headless --no-sandbox --disable-dev-shm-usage --disable-gpu"
+# Download Obscura headless browser (replaces Chromium, ~25MB vs ~400MB)
+RUN curl -LO https://github.com/h4ckf0r0day/obscura/releases/latest/download/obscura-x86_64-linux.tar.gz \
+    && tar xzf obscura-x86_64-linux.tar.gz \
+    && mv obscura /usr/local/bin/obscura \
+    && chmod +x /usr/local/bin/obscura \
+    && rm obscura-x86_64-linux.tar.gz \
+    && echo "Obscura installed: $(obscura --help 2>&1 | head -1)"
+
+# Obscura as CDP backend (auto-launched by the bot)
+ENV OBSCURA_PATH=/usr/local/bin/obscura
+ENV OBSCURA_PORT=9222
+ENV OBSCURA_STEALTH=1
 
 # Copy backend binary
 COPY --from=rust-builder /app/target/release/scraper-bot /app/scraper-bot
